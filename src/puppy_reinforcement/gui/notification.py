@@ -50,10 +50,23 @@ from aqt.qt import (
     Qt,
     QTimer,
     QWidget,
+    QWebEngineView,
+    QSize,
+    QVBoxLayout,
+    QScreen,
+    QKeyEvent,
 )
+from aqt.utils import tr
+from aqt.webview import AnkiWebView
 
 from ..libaddon.platform import is_anki_version_in_range
 
+# Check Anki version to handle API differences
+try:
+    from aqt.utils import mungeQA
+except ImportError:
+    # For Anki 23.10+ the function was renamed/moved
+    from anki.utils import mungeQA
 
 class Notification(QLabel):
     _current_timer: Optional[QTimer] = None
@@ -73,6 +86,7 @@ class Notification(QLabel):
         space_vertical: int = 0,
         fg_color: str = "#000000",
         bg_color: str = "#FFFFFF",
+        fullscreen: bool = False,
         **kwargs,
     ):
         super().__init__(text, parent=parent, **kwargs)
@@ -82,19 +96,145 @@ class Notification(QLabel):
         self._align_vertical = align_vertical
         self._space_horizontal = space_horizontal
         self._space_vertical = space_vertical
-        self.setFrameStyle(QFrame.Shape.Panel)
-        self.setLineWidth(2)
-        self.setWindowFlags(Qt.WindowType.ToolTip)
+        self._fullscreen = fullscreen
+        
+        # Initialize drag tracking variables
+        self._dragging = False
+        self._drag_position = None
+        self._current_screen = None
+        
+        if fullscreen:
+            # For fullscreen mode, use WebView for better rendering
+            self.web = AnkiWebView(parent=self)
+            self.web.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+            self.web.setFixedSize(QSize(parent.width(), parent.height()))
+            
+            # Set up the webview to fill the label
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(self.web)
+            self.setLayout(layout)
+            
+            # Process our HTML and add necessary bridge commands
+            try:
+                # Try the newer Anki 23.12+ API
+                self.web.stdHtml(
+                    body=text,
+                    css="",
+                    js=[],
+                    context=None,
+                    body_classes=[]
+                )
+            except TypeError:
+                # Fall back to older Anki API
+                try:
+                    self.web.stdHtml(text, js=[])
+                except TypeError:
+                    # Most basic fallback
+                    self.web.stdHtml(text)
+                    
+            # Set custom JavaScript to handle right-click only
+            self.web.eval("""
+                document.addEventListener('DOMContentLoaded', function() {
+                    // No longer make text overlay clickable to dismiss
+                    
+                    // Handle right-click on container to toggle fullscreen
+                    document.addEventListener('contextmenu', function(event) {
+                        event.preventDefault(); // Prevent default context menu
+                        pycmd('toggle-fullscreen');
+                    });
+
+                    // Add keyboard listener for Escape key
+                    document.addEventListener('keydown', function(event) {
+                        if (event.key === 'Escape') {
+                            pycmd('close-puppy-reinforcement');
+                        }
+                    });
+                });
+            """)
+            
+            if hasattr(self.web, 'onBridgeCmd'):
+                self.web.onBridgeCmd = self._on_bridge_cmd
+            
+            # Set up the window for fullscreen mode
+            self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+            self.setFixedSize(parent.width(), parent.height())
+        else:
+            # Standard non-fullscreen mode
+            self.setFrameStyle(QFrame.Shape.Panel)
+            self.setLineWidth(2)
+            self.setWindowFlags(Qt.WindowType.ToolTip)
+            
+        # Set up appearance
         palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(bg_color))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(fg_color))
-        self.setPalette(palette)
+        if bg_color != "transparent":
+            palette.setColor(QPalette.ColorRole.Window, QColor(bg_color))
+            palette.setColor(QPalette.ColorRole.WindowText, QColor(fg_color))
+            self.setPalette(palette)
+        else:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self.setStyleSheet("background-color: transparent;")
+
+        # Make sure we can capture keyboard events
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
+        # Save current screen
+        self._save_current_screen()
+
+    def _save_current_screen(self):
+        """Save the current screen information"""
+        parent = self._parent()
+        if parent:
+            self._current_screen = parent.screen()
+
+    def _on_bridge_cmd(self, cmd: str):
+        """Handle bridge commands safely for Anki 23.12.1+"""
+        if cmd == "close-puppy-reinforcement":
+            self.hide()
+            return True
+        elif cmd == "toggle-fullscreen":
+            self._toggle_fullscreen()
+            return True
+        return False
+
+    def _toggle_fullscreen(self):
+        """Toggle between fullscreen and normal mode"""
+        if self._fullscreen:
+            # Switch to normal mode
+            self._fullscreen = False
+            self.hide()
+            # Recreate notification in normal mode on the same screen
+            self._recreate_on_current_screen(fullscreen=False)
+        else:
+            # Switch to fullscreen mode
+            self._fullscreen = True
+            self.hide()
+            # Recreate notification in fullscreen mode on the same screen
+            self._recreate_on_current_screen(fullscreen=True)
+
+    def _recreate_on_current_screen(self, fullscreen=None):
+        """Recreate notification on the current screen with specified fullscreen state"""
+        # This method would be called from reinforcer.py
+        # We'll return the current screen information
+        # We don't implement the recreation logic here as it would need reinforcer.py changes
+        pass
+
+    def keyPressEvent(self, evt: QKeyEvent):
+        """Handle key press events - dismiss on Escape"""
+        if evt.key() == Qt.Key.Key_Escape:
+            self.hide()
+            evt.accept()
+        else:
+            super().keyPressEvent(evt)
 
     def show(self) -> None:
         # TODO: drop dependency on mw
         Notification._close_singleton()
         super().show()
         Notification._current_instance = self
+        
+        # Make sure we have focus to receive key events
+        self.setFocus()
         
         # Only set a timer if duration is greater than 0
         if self._duration > 0:
@@ -108,15 +248,54 @@ class Notification(QLabel):
                 )
 
     def mousePressEvent(self, evt: QMouseEvent):
-        evt.accept()
-        self.hide()
+        """Handle mouse press event for dragging"""
+        if evt.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_position = evt.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            evt.accept()
+        elif evt.button() == Qt.MouseButton.RightButton and not self._fullscreen:
+            # Right-click in normal mode toggles to fullscreen
+            self._toggle_fullscreen()
+            evt.accept()
+        else:
+            super().mousePressEvent(evt)
+
+    def mouseMoveEvent(self, evt: QMouseEvent):
+        """Handle mouse move event for dragging"""
+        if self._dragging and evt.buttons() & Qt.MouseButton.LeftButton:
+            self.move(evt.globalPosition().toPoint() - self._drag_position)
+            evt.accept()
+        else:
+            super().mouseMoveEvent(evt)
+
+    def mouseReleaseEvent(self, evt: QMouseEvent):
+        """Handle mouse release event"""
+        if self._dragging and evt.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            # Update the current screen based on new position
+            self._save_current_screen()
+            evt.accept()
+        else:
+            super().mouseReleaseEvent(evt)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         # true geometry is only known once resizeEvent fires
-        self._set_position()
+        if self._fullscreen:
+            # Set fullscreen geometry
+            parent = self._parent()
+            self.setGeometry(0, 0, parent.width(), parent.height())
+            if hasattr(self, 'web'):
+                self.web.setFixedSize(QSize(parent.width(), parent.height()))
+        else:
+            # Standard positioning
+            self._set_position()
         super().resizeEvent(event)
 
     def _set_position(self):
+        if self._fullscreen:
+            # Fullscreen doesn't need repositioning
+            return
+            
         align_horizontal = self._align_horizontal
         align_vertical = self._align_vertical
 

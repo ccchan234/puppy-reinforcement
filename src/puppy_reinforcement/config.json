@@ -1,6 +1,6 @@
 {
     "duration": 0,
-    "image_height": 600,
+    "image_height": 0,
     "encourage_every": 1,
     "max_spread": 0,
     "limit_max": 100,
@@ -10,6 +10,10 @@
     "count_reviewing": true,
     "reset_counter_on_new_day": false,
     "disable_default_images": false,
+    "font_size": 16,
+    "text_bg_opacity": 0.7,
+    "text_bg_color": "#000000",
+    "text_color": "#FFFFFF",
     "encouragements": {
         "low": ["Great job!", "Keep it up!", "Way to go!", "Keep up the good work!"],
         "middle": ["You're on a streak!", "You're crushing it!", "Don't stop now!",

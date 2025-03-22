@@ -31,6 +31,7 @@
 # Any modifications to this file must keep this entire header intact.
 
 from aqt.gui_hooks import add_cards_did_add_note, reviewer_did_answer_card
+from aqt import gui_hooks, mw
 
 from .config import config
 from .reinforcer import PuppyReinforcer
@@ -41,3 +42,43 @@ def initialize_views(puppy_reinforcer: PuppyReinforcer):
         reviewer_did_answer_card.append(puppy_reinforcer.show_dog)
     if config["local"]["count_adding"]:
         add_cards_did_add_note.append(puppy_reinforcer.show_dog)
+    
+    # Register the bridge command for closing the notification
+    gui_hooks.webview_did_receive_js_message.append(on_js_message)
+
+def on_js_message(handled, message, context):
+    """
+    Handle JS messages for the Puppy Reinforcement addon
+    
+    This function is compatible with both older and newer Anki versions.
+    For Anki 23.12.1+ it returns a bool as required by the new API.
+    """
+    # Import inside the function to avoid circular imports
+    from .gui.notification import Notification
+    
+    if message == "close-puppy-reinforcement":
+        # Find and close any open Notification instance
+        if hasattr(Notification, "_current_instance") and Notification._current_instance:
+            try:
+                Notification._current_instance.hide()
+            except Exception as e:
+                print(f"Error closing notification: {e}")
+        return (True, None)  # Mark as handled with proper return value
+    
+    elif message == "toggle-fullscreen":
+        # Toggle fullscreen for any open notification
+        if hasattr(Notification, "_current_instance") and Notification._current_instance:
+            try:
+                if hasattr(Notification._current_instance, "_toggle_fullscreen"):
+                    Notification._current_instance._toggle_fullscreen()
+            except Exception as e:
+                print(f"Error toggling fullscreen: {e}")
+        return (True, None)  # Mark as handled with proper return value
+    
+    # For Anki 23.12.1+ compatibility, we need to return the correct type
+    if isinstance(handled, tuple):
+        return handled  # Pass through unhandled messages with tuple format
+    return handled  # Pass through unhandled messages for older versions
+
+# Import Notification class here to avoid circular imports
+from .gui.notification import Notification

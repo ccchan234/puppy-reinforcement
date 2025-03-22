@@ -72,31 +72,34 @@ class PuppyReinforcer:
         if local_config["reset_counter_on_new_day"]:
             self._maybe_reset_count()
 
+        # Increment counter for stat tracking but show dog every time
         self._state["cnt"] += 1
-        if self._state["cnt"] != self._state["last"] + self._state["ivl"]:
-            return
+        
+        # Show image after every card review
         image_path = self._get_next_image()
         encouragement = self._get_encouragement(self._state["cnt"])
         self._show_tooltip(encouragement, image_path)
-        # intermittent reinforcement:
-        self._state["ivl"] = max(
-            1,
-            local_config["encourage_every"]
-            + random.randint(-local_config["max_spread"], local_config["max_spread"]),
-        )
+        
+        # No need for intermittent reinforcement anymore
         self._state["last"] = self._state["cnt"]
 
     def _show_tooltip(self, encouragement: str, image_path: str):
         local_config = self._config["local"]
         count = self._state["cnt"]
 
+        # Use much larger image size (nearly full screen)
+        image_height = 600  # Much larger than default 128px
+
         html = f"""\
 <table cellpadding=10>
 <tr>
-<td><img height={local_config["image_height"]} src="{image_path}"></td>
+<td><img height={image_height} src="{image_path}"></td>
+</tr>
+<tr>
 <td valign="middle">
     <center><b>{count} {'cards' if count > 1 else 'card'} done so far!</b><br>
-    {encouragement}</center>
+    {encouragement}<br><br>
+    <span style="font-size: 14px; background-color: #eeeeee; padding: 5px 10px; border-radius: 5px; border: 1px solid #cccccc;">Click anywhere to continue</span></center>
 </td>
 </tr>
 </table>"""
@@ -104,7 +107,8 @@ class PuppyReinforcer:
         notification = Notification(
             html,
             self._mw.progress,
-            duration=local_config["duration"],
+            # Set duration to 0 so it stays until clicked
+            duration=0,
             parent=self._mw.app.activeWindow() or self._mw,
             align_horizontal=local_config["tooltip_align_horizontal"],
             align_vertical=local_config["tooltip_align_vertical"],
